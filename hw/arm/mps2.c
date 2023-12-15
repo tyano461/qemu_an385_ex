@@ -111,6 +111,18 @@ OBJECT_DECLARE_TYPE(MPS2MachineState, MPS2MachineClass, MPS2_MACHINE)
  */
 #define REFCLK_FRQ (1 * 1000 * 1000)
 
+static void add_extra_mmio_an385(MPS2MachineState* mms, MemoryRegion *sysmem);
+static uint64_t an385_ex_mmio_read(void *opaque, hwaddr, unsigned size);
+static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size);
+static void udp_send2dummy(void);
+static void* udp_recvfromdummy(void* param);
+
+static MemoryRegionOps ex_mmio_op = {
+    .read  = an385_ex_mmio_read,
+    .write = an385_ex_mmio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN
+};
+
 /* Initialize the auxiliary RAM region @mr and map it into
  * the memory map at @base.
  */
@@ -207,6 +219,8 @@ static void mps2_common_init(MachineState *machine)
 
     switch (mmc->fpga_type) {
     case FPGA_AN385:
+        add_extra_mmio_an385(mms, system_memory);
+        /* fall through. */
     case FPGA_AN386:
     case FPGA_AN500:
         make_ram(&mms->ssram1, "mps.ssram1", 0x0, 0x400000);
@@ -579,3 +593,125 @@ static void mps2_machine_init(void)
 }
 
 type_init(mps2_machine_init);
+
+#define EX_MMIO_BASE 0x28000000
+#define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
+#define ERRRET(c,s,...) \
+    do { \
+        if (c) { \
+            g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
+            goto error_return; \
+        } \
+    } while(0)
+
+#define d(s,...) \
+    do { \
+        g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
+    } while(0)
+
+static uint8_t mmio_buf[0x200000];
+static pthread_t thread;
+
+static void add_extra_mmio_an385(MPS2MachineState* mms, MemoryRegion *sysmem) {
+    MemoryRegion *ex_mmio;
+    ex_mmio = g_new(MemoryRegion, 1);
+    ERRRET(!ex_mmio, "g_new failed.");
+
+    memory_region_init_io(ex_mmio, OBJECT(mms), &ex_mmio_op, mms, "an385.ex_mmio", 0x08000000);
+    memory_region_add_subregion(sysmem, EX_MMIO_BASE, ex_mmio);
+    
+    pthread_create(&thread, NULL, udp_recvfromdummy, NULL);
+
+    d("added to %x", EX_MMIO_BASE);
+error_return:
+    return;
+}
+
+static uint64_t an385_ex_mmio_read(void *opaque, hwaddr addr, unsigned size) {
+    uint64_t val = 0;
+    d("addr:%lx",addr);
+    switch (size) {
+    case 1:
+        uint8_t *u8p = (uint8_t*)&mmio_buf[addr];
+        uint8_t u8v = *u8p;
+        val = (uint64_t)u8v;
+        break;
+    case 2:
+        uint16_t *u16p = (uint16_t*)&mmio_buf[addr];
+        uint16_t u16v = *u16p;
+        val = (uint64_t)u16v;
+        break;
+    case 8:
+        uint64_t *u64p = (uint64_t*)&mmio_buf[addr];
+        uint64_t u64v = *u64p;
+        val = (uint64_t)u64v;
+        break;
+    case 4:
+    default:
+        uint32_t *u32p = (uint32_t*)&mmio_buf[addr];
+        uint32_t u32v = *u32p;
+        val = (uint64_t)u32v;
+        break;
+    }
+    return val;
+}
+
+static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
+    d("addr:%lx",addr);
+    uint32_t befval;
+    if (addr == 0 && size == 4) {
+        befval = *(uint32_t*)&mmio_buf[addr];
+    }
+
+    switch (size) {
+    case 1:
+        uint8_t *u8p = (uint8_t*)&mmio_buf[addr];
+        *u8p = (uint8_t)(value & 0xff);
+        break;
+    case 2:
+        uint16_t *u16p = (uint16_t*)&mmio_buf[addr];
+        *u16p = (uint16_t)(value & 0xffff);
+        break;
+    case 8:
+        uint64_t *u64p = (uint64_t*)&mmio_buf[addr];
+        *u64p = value;
+        break;
+    case 4:
+    default:
+        uint32_t *u32p = (uint32_t*)&mmio_buf[addr];
+        *u32p = (uint32_t)(value & 0xffffffff);
+        break;
+    }
+    if (addr == 0 && size == 4) {
+        if (befval == 1 && !value) {
+            udp_send2dummy();
+        }
+    }
+}
+
+#define TARGET_PORT 7145
+#define QEMU_DUMMY_PORT 7150
+
+void udp_send2dummy(void) {
+    int sock;
+    struct sockaddr_in addr;
+    
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(TARGET_PORT);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    
+    sendto(sock, "HELLO", 5, 0, (struct sockaddr *)&addr, sizeof(addr));
+    
+    close(sock);
+}
+
+void* udp_recvfromdummy(void* param) {
+    (void)param;
+    d("");
+    while(1) {
+        usleep(10000000);
+    }
+    return NULL;
+}
