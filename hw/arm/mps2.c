@@ -50,15 +50,18 @@
 #include "hw/qdev-clock.h"
 #include "qapi/qmp/qlist.h"
 #include "qom/object.h"
+#include <sys/epoll.h>
 
-typedef enum MPS2FPGAType {
+typedef enum MPS2FPGAType
+{
     FPGA_AN385,
     FPGA_AN386,
     FPGA_AN500,
     FPGA_AN511,
 } MPS2FPGAType;
 
-struct MPS2MachineClass {
+struct MPS2MachineClass
+{
     MachineClass parent;
     MPS2FPGAType fpga_type;
     uint32_t scc_id;
@@ -67,7 +70,8 @@ struct MPS2MachineClass {
     hwaddr psram_base;
 };
 
-struct MPS2MachineState {
+struct MPS2MachineState
+{
     MachineState parent;
 
     ARMv7MState armv7m;
@@ -111,17 +115,16 @@ OBJECT_DECLARE_TYPE(MPS2MachineState, MPS2MachineClass, MPS2_MACHINE)
  */
 #define REFCLK_FRQ (1 * 1000 * 1000)
 
-static void add_extra_mmio_an385(MPS2MachineState* mms, MemoryRegion *sysmem);
+static void add_extra_mmio_an385(MPS2MachineState *mms, MemoryRegion *sysmem);
 static uint64_t an385_ex_mmio_read(void *opaque, hwaddr, unsigned size);
 static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size);
 static void udp_send2dummy(void);
-static void* udp_recvfromdummy(void* param);
+static void *udp_recvfromdummy(void *param);
 
 static MemoryRegionOps ex_mmio_op = {
-    .read  = an385_ex_mmio_read,
+    .read = an385_ex_mmio_read,
     .write = an385_ex_mmio_write,
-    .endianness = DEVICE_LITTLE_ENDIAN
-};
+    .endianness = DEVICE_LITTLE_ENDIAN};
 
 /* Initialize the auxiliary RAM region @mr and map it into
  * the memory map at @base.
@@ -154,13 +157,15 @@ static void mps2_common_init(MachineState *machine)
     QList *oscclk;
     int i;
 
-    if (strcmp(machine->cpu_type, mc->default_cpu_type) != 0) {
+    if (strcmp(machine->cpu_type, mc->default_cpu_type) != 0)
+    {
         error_report("This board can only be used with CPU %s",
                      mc->default_cpu_type);
         exit(1);
     }
 
-    if (machine->ram_size != mc->default_ram_size) {
+    if (machine->ram_size != mc->default_ram_size)
+    {
         char *sz = size_to_str(mc->default_ram_size);
         error_report("Invalid RAM size, should be %s", sz);
         g_free(sz);
@@ -207,7 +212,8 @@ static void mps2_common_init(MachineState *machine)
      */
     memory_region_add_subregion(system_memory, mmc->psram_base, machine->ram);
 
-    if (mmc->has_block_ram) {
+    if (mmc->has_block_ram)
+    {
         make_ram(&mms->blockram, "mps.blockram", 0x01000000, 0x4000);
         make_ram_alias(&mms->blockram_m1, "mps.blockram_m1",
                        &mms->blockram, 0x01004000);
@@ -217,7 +223,8 @@ static void mps2_common_init(MachineState *machine)
                        &mms->blockram, 0x0100c000);
     }
 
-    switch (mmc->fpga_type) {
+    switch (mmc->fpga_type)
+    {
     case FPGA_AN385:
         add_extra_mmio_an385(mms, system_memory);
         /* fall through. */
@@ -241,7 +248,8 @@ static void mps2_common_init(MachineState *machine)
 
     object_initialize_child(OBJECT(mms), "armv7m", &mms->armv7m, TYPE_ARMV7M);
     armv7m = DEVICE(&mms->armv7m);
-    switch (mmc->fpga_type) {
+    switch (mmc->fpga_type)
+    {
     case FPGA_AN385:
     case FPGA_AN386:
     case FPGA_AN500:
@@ -281,7 +289,8 @@ static void mps2_common_init(MachineState *machine)
     create_unimplemented_device("RESERVED 4", 0x40030000, 0x001D0000);
     create_unimplemented_device("VGA", 0x41000000, 0x0200000);
 
-    switch (mmc->fpga_type) {
+    switch (mmc->fpga_type)
+    {
     case FPGA_AN385:
     case FPGA_AN386:
     case FPGA_AN500:
@@ -298,7 +307,8 @@ static void mps2_common_init(MachineState *machine)
         orgate_dev = DEVICE(orgate);
         qdev_connect_gpio_out(orgate_dev, 0, qdev_get_gpio_in(armv7m, 12));
 
-        for (i = 0; i < 5; i++) {
+        for (i = 0; i < 5; i++)
+        {
             DeviceState *dev;
             SysBusDevice *s;
 
@@ -309,7 +319,8 @@ static void mps2_common_init(MachineState *machine)
             static const int uartirq[] = {0, 2, 4, 18, 20};
             qemu_irq txovrint = NULL, rxovrint = NULL;
 
-            if (i < 3) {
+            if (i < 3)
+            {
                 txovrint = qdev_get_gpio_in(orgate_dev, i * 2);
                 rxovrint = qdev_get_gpio_in(orgate_dev, i * 2 + 1);
             }
@@ -341,7 +352,8 @@ static void mps2_common_init(MachineState *machine)
         orgate_dev = DEVICE(orgate);
         qdev_connect_gpio_out(orgate_dev, 0, qdev_get_gpio_in(armv7m, 12));
 
-        for (i = 0; i < 5; i++) {
+        for (i = 0; i < 5; i++)
+        {
             /* system irq numbers for the combined tx/rx for each UART */
             static const int uart_txrx_irqno[] = {0, 2, 45, 46, 56};
             static const hwaddr uartbase[] = {0x40004000, 0x40005000,
@@ -374,14 +386,16 @@ static void mps2_common_init(MachineState *machine)
     default:
         g_assert_not_reached();
     }
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++)
+    {
         static const hwaddr gpiobase[] = {0x40010000, 0x40011000,
                                           0x40012000, 0x40013000};
         create_unimplemented_device("cmsdk-ahb-gpio", gpiobase[i], 0x1000);
     }
 
     /* CMSDK APB subsystem */
-    for (i = 0; i < ARRAY_SIZE(mms->timer); i++) {
+    for (i = 0; i < ARRAY_SIZE(mms->timer); i++)
+    {
         g_autofree char *name = g_strdup_printf("timer%d", i);
         hwaddr base = 0x40000000 + i * 0x1000;
         int irqno = 8 + i;
@@ -431,14 +445,15 @@ static void mps2_common_init(MachineState *machine)
     qdev_prop_set_uint32(DEVICE(&mms->fpgaio), "prescale-clk", 25000000);
     sysbus_realize(SYS_BUS_DEVICE(&mms->fpgaio), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&mms->fpgaio), 0, 0x40028000);
-    sysbus_create_simple(TYPE_PL022, 0x40025000,        /* External ADC */
+    sysbus_create_simple(TYPE_PL022, 0x40025000, /* External ADC */
                          qdev_get_gpio_in(armv7m, 22));
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 2; i++)
+    {
         static const int spi_irqno[] = {11, 24};
-        static const hwaddr spibase[] = {0x40020000,    /* APB */
-                                         0x40021000,    /* LCD */
-                                         0x40026000,    /* Shield0 */
-                                         0x40027000};   /* Shield1 */
+        static const hwaddr spibase[] = {0x40020000,  /* APB */
+                                         0x40021000,  /* LCD */
+                                         0x40026000,  /* Shield0 */
+                                         0x40027000}; /* Shield1 */
         DeviceState *orgate_dev;
         Object *orgate;
         int j;
@@ -449,20 +464,23 @@ static void mps2_common_init(MachineState *machine)
         qdev_realize(orgate_dev, NULL, &error_fatal);
         qdev_connect_gpio_out(orgate_dev, 0,
                               qdev_get_gpio_in(armv7m, spi_irqno[i]));
-        for (j = 0; j < 2; j++) {
+        for (j = 0; j < 2; j++)
+        {
             sysbus_create_simple(TYPE_PL022, spibase[2 * i + j],
                                  qdev_get_gpio_in(orgate_dev, j));
         }
     }
-    for (i = 0; i < 4; i++) {
-        static const hwaddr i2cbase[] = {0x40022000,    /* Touch */
-                                         0x40023000,    /* Audio */
-                                         0x40029000,    /* Shield0 */
-                                         0x4002a000};   /* Shield1 */
+    for (i = 0; i < 4; i++)
+    {
+        static const hwaddr i2cbase[] = {0x40022000,  /* Touch */
+                                         0x40023000,  /* Audio */
+                                         0x40029000,  /* Shield0 */
+                                         0x4002a000}; /* Shield1 */
         DeviceState *dev;
 
         dev = sysbus_create_simple(TYPE_ARM_SBCON_I2C, i2cbase[i], NULL);
-        if (i < 2) {
+        if (i < 2)
+        {
             /*
              * internal-only bus: mark it full to avoid user-created
              * i2c devices being plugged into it.
@@ -596,30 +614,34 @@ type_init(mps2_machine_init);
 
 #define EX_MMIO_BASE 0x28000000
 #define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
-#define ERRRET(c,s,...) \
-    do { \
-        if (c) { \
+#define ERRRET(c, s, ...)                                                                  \
+    do                                                                                     \
+    {                                                                                      \
+        if (c)                                                                             \
+        {                                                                                  \
             g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
-            goto error_return; \
-        } \
-    } while(0)
+            goto error_return;                                                             \
+        }                                                                                  \
+    } while (0)
 
-#define d(s,...) \
-    do { \
+#define d(s, ...)                                                                      \
+    do                                                                                 \
+    {                                                                                  \
         g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
-    } while(0)
+    } while (0)
 
 static uint8_t mmio_buf[0x200000];
 static pthread_t thread;
 
-static void add_extra_mmio_an385(MPS2MachineState* mms, MemoryRegion *sysmem) {
+static void add_extra_mmio_an385(MPS2MachineState *mms, MemoryRegion *sysmem)
+{
     MemoryRegion *ex_mmio;
     ex_mmio = g_new(MemoryRegion, 1);
     ERRRET(!ex_mmio, "g_new failed.");
 
     memory_region_init_io(ex_mmio, OBJECT(mms), &ex_mmio_op, mms, "an385.ex_mmio", 0x08000000);
     memory_region_add_subregion(sysmem, EX_MMIO_BASE, ex_mmio);
-    
+
     pthread_create(&thread, NULL, udp_recvfromdummy, NULL);
 
     d("added to %x", EX_MMIO_BASE);
@@ -627,63 +649,73 @@ error_return:
     return;
 }
 
-static uint64_t an385_ex_mmio_read(void *opaque, hwaddr addr, unsigned size) {
+static uint64_t an385_ex_mmio_read(void *opaque, hwaddr addr, unsigned size)
+{
     uint64_t val = 0;
-    d("addr:%lx",addr);
-    switch (size) {
+    switch (size)
+    {
     case 1:
-        uint8_t *u8p = (uint8_t*)&mmio_buf[addr];
+        uint8_t *u8p = (uint8_t *)&mmio_buf[addr];
         uint8_t u8v = *u8p;
         val = (uint64_t)u8v;
         break;
     case 2:
-        uint16_t *u16p = (uint16_t*)&mmio_buf[addr];
+        uint16_t *u16p = (uint16_t *)&mmio_buf[addr];
         uint16_t u16v = *u16p;
         val = (uint64_t)u16v;
         break;
     case 8:
-        uint64_t *u64p = (uint64_t*)&mmio_buf[addr];
+        uint64_t *u64p = (uint64_t *)&mmio_buf[addr];
         uint64_t u64v = *u64p;
         val = (uint64_t)u64v;
         break;
     case 4:
     default:
-        uint32_t *u32p = (uint32_t*)&mmio_buf[addr];
+        uint32_t *u32p = (uint32_t *)&mmio_buf[addr];
         uint32_t u32v = *u32p;
         val = (uint64_t)u32v;
+        d("%lx:%lx", addr, val);
         break;
     }
     return val;
 }
 
-static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size) {
-    d("addr:%lx",addr);
+static bool first = true;
+static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
     uint32_t befval;
-    if (addr == 0 && size == 4) {
-        befval = *(uint32_t*)&mmio_buf[addr];
-    }
+    befval = *(uint32_t *)&mmio_buf[addr];
+    d("%lx:%x -> %lx", addr, befval, value);
 
-    switch (size) {
+    switch (size)
+    {
     case 1:
-        uint8_t *u8p = (uint8_t*)&mmio_buf[addr];
+        uint8_t *u8p = (uint8_t *)&mmio_buf[addr];
         *u8p = (uint8_t)(value & 0xff);
         break;
     case 2:
-        uint16_t *u16p = (uint16_t*)&mmio_buf[addr];
+        uint16_t *u16p = (uint16_t *)&mmio_buf[addr];
         *u16p = (uint16_t)(value & 0xffff);
         break;
     case 8:
-        uint64_t *u64p = (uint64_t*)&mmio_buf[addr];
+        uint64_t *u64p = (uint64_t *)&mmio_buf[addr];
         *u64p = value;
         break;
     case 4:
     default:
-        uint32_t *u32p = (uint32_t*)&mmio_buf[addr];
-        *u32p = (uint32_t)(value & 0xffffffff);
+        uint32_t *u32p = (uint32_t *)&mmio_buf[addr];
+        if (addr != 0x200 || first)
+        {
+            *u32p = (uint32_t)(value & 0xffffffff);
+            if (addr == 0x200)
+                first = false;
+        }
         break;
     }
-    if (addr == 0 && size == 4) {
-        if (befval == 1 && !value) {
+    if (addr == 0 && size == 4)
+    {
+        if (befval && !value)
+        {
             udp_send2dummy();
         }
     }
@@ -692,26 +724,91 @@ static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsig
 #define TARGET_PORT 7145
 #define QEMU_DUMMY_PORT 7150
 
-void udp_send2dummy(void) {
+void udp_send2dummy(void)
+{
     int sock;
     struct sockaddr_in addr;
-    
+
+    d("");
     sock = socket(AF_INET, SOCK_DGRAM, 0);
-    
+
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TARGET_PORT);
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    
+
     sendto(sock, "HELLO", 5, 0, (struct sockaddr *)&addr, sizeof(addr));
-    
+
     close(sock);
 }
 
-void* udp_recvfromdummy(void* param) {
+#define NEVENTS 2
+#define SERVER_PORT 7146
+#define SERVER_ADDR INADDR_ANY
+#define BUF_SIZE 2048
+
+static void init_sock_addr(int *sock, struct sockaddr_in *addr, uint32_t ip, uint16_t port)
+{
+    *sock = socket(AF_INET, SOCK_DGRAM, 0);
+    addr->sin_family = AF_INET;
+    addr->sin_addr.s_addr = ip;
+    addr->sin_port = htons(port);
+}
+
+static int set_epoll_event(int epfd, int sock, struct epoll_event *ev)
+{
+    memset(ev, 0, sizeof(struct epoll_event));
+    ev->events = EPOLLIN;
+    ev->data.fd = sock;
+    return epoll_ctl(epfd, EPOLL_CTL_ADD, sock, ev);
+}
+
+void *udp_recvfromdummy(void *param)
+{
     (void)param;
+    int sock;
+    struct sockaddr_in addr;
+    int epfd, nfds, i, n;
+    struct epoll_event ev, ev_ret[NEVENTS];
+    char buf[BUF_SIZE];
+    bool found;
+
     d("");
-    while(1) {
-        usleep(10000000);
+    init_sock_addr(&sock, &addr, SERVER_ADDR, SERVER_PORT);
+
+    n = bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+    ERRRET(n != 0, "bind");
+
+    epfd = epoll_create(NEVENTS);
+    ERRRET(epfd < 0, "epoll_create");
+
+    n = set_epoll_event(epfd, sock, &ev);
+    ERRRET(n != 0, "epoll_ctl");
+
+    while (1)
+    {
+        nfds = epoll_wait(epfd, ev_ret, NEVENTS, -1);
+        ERRRET(nfds <= 0, "epoll_wait");
+
+        found = false;
+        for (i = 0; i < nfds; i++)
+        {
+            if (ev_ret[i].data.fd == sock)
+            {
+                found = true;
+                n = recv(sock, buf, sizeof(buf), 0);
+                if (n)
+                {
+                    d("TODO: irq fire n:%d", n);
+                }
+            }
+        }
+
+        if (!found)
+        {
+            d("unknown received fd:%d sock:%d", ev_ret[i].data.fd, sock);
+        }
     }
+
+error_return:
     return NULL;
 }
