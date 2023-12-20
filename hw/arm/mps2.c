@@ -46,6 +46,7 @@
 #include "hw/i2c/arm_sbcon_i2c.h"
 #include "hw/net/lan9118.h"
 #include "net/net.h"
+#include "hw/irq.h"
 #include "hw/watchdog/cmsdk-apb-watchdog.h"
 #include "hw/qdev-clock.h"
 #include "qapi/qmp/qlist.h"
@@ -115,16 +116,44 @@ OBJECT_DECLARE_TYPE(MPS2MachineState, MPS2MachineClass, MPS2_MACHINE)
  */
 #define REFCLK_FRQ (1 * 1000 * 1000)
 
+/* user added definitions */
+#define IRQ_ETHER 13
+#define TYPE_DUMMY_ETHERNET "dummy-ethernet"
+#define TYPE_MV88W8618_ETH "mv88w8618_eth"
+#define EX_MMIO_BASE 0x28000000
+#define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
+
+#define ERRRET(c, s, ...)                                                                  \
+    do                                                                                     \
+    {                                                                                      \
+        if (c)                                                                             \
+        {                                                                                  \
+            g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
+            goto error_return;                                                             \
+        }                                                                                  \
+    } while (0)
+
+#define d(s, ...)                                                                      \
+    do                                                                                 \
+    {                                                                                  \
+        g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
+    } while (0)
+
+/* functions */
 static void add_extra_mmio_an385(MPS2MachineState *mms, MemoryRegion *sysmem);
 static uint64_t an385_ex_mmio_read(void *opaque, hwaddr, unsigned size);
 static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size);
 static void udp_send2dummy(void);
 static void *udp_recvfromdummy(void *param);
+static void send_to_freertos(uint8_t *buf, size_t size);
+static void register_ether_irq(DeviceState *armv7m);
 
 static MemoryRegionOps ex_mmio_op = {
     .read = an385_ex_mmio_read,
     .write = an385_ex_mmio_write,
-    .endianness = DEVICE_LITTLE_ENDIAN};
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+qemu_irq eth_irq = NULL;
 
 /* Initialize the auxiliary RAM region @mr and map it into
  * the memory map at @base.
@@ -156,6 +185,8 @@ static void mps2_common_init(MachineState *machine)
     DeviceState *armv7m, *sccdev;
     QList *oscclk;
     int i;
+    CPUState *cpu = CPU(ARM_CPU(first_cpu));
+    (void)cpu;
 
     if (strcmp(machine->cpu_type, mc->default_cpu_type) != 0)
     {
@@ -248,6 +279,7 @@ static void mps2_common_init(MachineState *machine)
 
     object_initialize_child(OBJECT(mms), "armv7m", &mms->armv7m, TYPE_ARMV7M);
     armv7m = DEVICE(&mms->armv7m);
+    d("armv7m:%p mms->armv7m:%p", armv7m, &mms->armv7m);
     switch (mmc->fpga_type)
     {
     case FPGA_AN385:
@@ -311,7 +343,6 @@ static void mps2_common_init(MachineState *machine)
         {
             DeviceState *dev;
             SysBusDevice *s;
-
             static const hwaddr uartbase[] = {0x40004000, 0x40005000,
                                               0x40006000, 0x40007000,
                                               0x40009000};
@@ -336,6 +367,7 @@ static void mps2_common_init(MachineState *machine)
             sysbus_connect_irq(s, 2, txovrint);
             sysbus_connect_irq(s, 3, rxovrint);
         }
+        register_ether_irq(armv7m);
         break;
     }
     case FPGA_AN511:
@@ -612,24 +644,6 @@ static void mps2_machine_init(void)
 
 type_init(mps2_machine_init);
 
-#define EX_MMIO_BASE 0x28000000
-#define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
-#define ERRRET(c, s, ...)                                                                  \
-    do                                                                                     \
-    {                                                                                      \
-        if (c)                                                                             \
-        {                                                                                  \
-            g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
-            goto error_return;                                                             \
-        }                                                                                  \
-    } while (0)
-
-#define d(s, ...)                                                                      \
-    do                                                                                 \
-    {                                                                                  \
-        g_print("%s(%d) %s " s "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__); \
-    } while (0)
-
 static uint8_t mmio_buf[0x200000];
 static pthread_t thread;
 
@@ -798,7 +812,7 @@ void *udp_recvfromdummy(void *param)
                 n = recv(sock, buf, sizeof(buf), 0);
                 if (n)
                 {
-                    d("TODO: irq fire n:%d", n);
+                    send_to_freertos((uint8_t *)buf, n);
                 }
             }
         }
@@ -811,4 +825,36 @@ void *udp_recvfromdummy(void *param)
 
 error_return:
     return NULL;
+}
+
+static void send_to_freertos(uint8_t *buf, size_t size)
+{
+    (void)buf;
+    CPUState *cpu = CPU(ARM_CPU(first_cpu));
+    NVICState *nvic;
+    (void)nvic;
+
+    if (eth_irq)
+    {
+        d("irq fire cpu:%p n:%lu", cpu, size);
+        qemu_mutex_lock_iothread();
+
+        qemu_set_irq(eth_irq, 1);
+        cpu_interrupt(cpu, CPU_INTERRUPT_HARD);
+        qemu_set_irq(eth_irq, 0);
+        qemu_mutex_unlock_iothread();
+    }
+}
+
+static void register_ether_irq(DeviceState *armv7m)
+{
+    DeviceState *dev;
+
+    dev = qdev_new(TYPE_MV88W8618_ETH);
+    object_property_set_link(OBJECT(dev), "dma-memory",
+                             OBJECT(get_system_memory()), &error_fatal);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+
+    eth_irq = qdev_get_gpio_in(armv7m, IRQ_ETHER);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, eth_irq);
 }
