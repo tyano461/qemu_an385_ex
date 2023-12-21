@@ -644,6 +644,11 @@ static void mps2_machine_init(void)
 
 type_init(mps2_machine_init);
 
+#define RX_DATA_SIZE (uint32_t *)&mmio_buf[0x100004]
+#define RX_DATA_BASE (uint32_t *)&mmio_buf[0x100010]
+#define TX_DATA_SIZE (uint32_t *)&mmio_buf[0x000004]
+#define TX_DATA_BASE (uint32_t *)&mmio_buf[0x000010]
+
 static uint8_t mmio_buf[0x200000];
 static pthread_t thread;
 
@@ -688,7 +693,6 @@ static uint64_t an385_ex_mmio_read(void *opaque, hwaddr addr, unsigned size)
         uint32_t *u32p = (uint32_t *)&mmio_buf[addr];
         uint32_t u32v = *u32p;
         val = (uint64_t)u32v;
-        d("%lx:%lx", addr, val);
         break;
     }
     return val;
@@ -699,7 +703,7 @@ static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsig
 {
     uint32_t befval;
     befval = *(uint32_t *)&mmio_buf[addr];
-    d("%lx:%x -> %lx", addr, befval, value);
+    // d("%lx:%x -> %lx", addr, befval, value);
 
     switch (size)
     {
@@ -718,10 +722,10 @@ static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsig
     case 4:
     default:
         uint32_t *u32p = (uint32_t *)&mmio_buf[addr];
-        if (addr != 0x200 || first)
+        if (addr != 0xE0000 || first)
         {
             *u32p = (uint32_t)(value & 0xffffffff);
-            if (addr == 0x200)
+            if (addr == 0xE0000)
                 first = false;
         }
         break;
@@ -735,28 +739,29 @@ static void an385_ex_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsig
     }
 }
 
-#define TARGET_PORT 7145
-#define QEMU_DUMMY_PORT 7150
+#define TARGET_PORT 7146
 
 void udp_send2dummy(void)
 {
     int sock;
     struct sockaddr_in addr;
+    uint32_t size;
+    size = *TX_DATA_SIZE;
 
-    d("");
+    d("sz:%u", size);
     sock = socket(AF_INET, SOCK_DGRAM, 0);
 
     addr.sin_family = AF_INET;
     addr.sin_port = htons(TARGET_PORT);
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    sendto(sock, "HELLO", 5, 0, (struct sockaddr *)&addr, sizeof(addr));
+    sendto(sock, TX_DATA_BASE, size, 0, (struct sockaddr *)&addr, sizeof(addr));
 
     close(sock);
 }
 
 #define NEVENTS 2
-#define SERVER_PORT 7146
+#define SERVER_PORT 7144
 #define SERVER_ADDR INADDR_ANY
 #define BUF_SIZE 2048
 
@@ -829,10 +834,12 @@ error_return:
 
 static void send_to_freertos(uint8_t *buf, size_t size)
 {
-    (void)buf;
     CPUState *cpu = CPU(ARM_CPU(first_cpu));
     NVICState *nvic;
     (void)nvic;
+
+    *RX_DATA_SIZE = (uint32_t)size;
+    memcpy(RX_DATA_BASE, buf, size);
 
     if (eth_irq)
     {
